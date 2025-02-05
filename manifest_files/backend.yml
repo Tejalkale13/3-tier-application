@@ -1,0 +1,165 @@
+# ============================
+# 📌 Backend ConfigMap
+# ============================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+data:
+  FLASK_ENV: development
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: mydb
+---
+# ============================
+# 📌 Backend Deployment
+# ============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+      - name: backend
+        image: prasadsb/3-tier:backend-v1
+        ports:
+        - containerPort: 5000
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+        envFrom:
+        - configMapRef:
+            name: backend-config
+        - secretRef:
+            name: postgres-secrets
+---
+# ============================
+# 📌 Backend Service
+# ============================
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: backend
+root@vm:/home/azureuser/manifest_files# cat frontend.yml
+# ============================
+# 📌 Frontend ConfigMap
+# ============================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+data:
+  WATCHPACK_POLLING: "true"
+  WDS_SOCKET_PORT: "0"
+---
+# ============================
+# 📌 Frontend Deployment
+# ============================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: prasadsb/3-tier:frontend-latest
+        ports:
+        - containerPort: 3000
+        resources:
+          limits:
+            memory: 512Mi
+            cpu: 200m
+          requests:
+            memory: 256Mi
+            cpu: 100m
+        envFrom:
+        - configMapRef:
+            name: frontend-config
+        command: ["npm"]
+        args: ["start"]
+        env:
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "3000"
+---
+# ============================
+# 📌 Frontend Service
+# ============================
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  type: NodePort
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 31239
+    name: http
+  selector:
+    app: frontend
+---
+# ============================
+# 📌 Frontend HPA
+# ============================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: frontend-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: frontend
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60    # Wait 1 minute before scaling down
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+    scaleUp:
+      stabilizationWindowSeconds: 0     # Scale up immediately when needed
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
