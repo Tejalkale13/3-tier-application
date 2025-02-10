@@ -1,62 +1,98 @@
 # ============================
-# 📌 Backend ConfigMap
+# 📌 Database ConfigMap
 # ============================
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: backend-config
+  name: postgres-config
 data:
-  FLASK_ENV: development
-  POSTGRES_HOST: postgres
-  POSTGRES_PORT: "5432"
   POSTGRES_DB: mydb
+  PGDATA: /var/lib/postgresql/data/pgdata
 ---
 # ============================
-# 📌 Backend Deployment
+# 📌 Database Secrets
+# ============================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secrets
+type: Opaque
+data:
+  POSTGRES_USER: dXNlcg==      # base64 encoded "user"
+  POSTGRES_PASSWORD: cGFzc3dvcmQ=  # base64 encoded "password"
+---
+# ============================
+# 📌 Persistent Volume Claim
+# ============================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# ============================
+# 📌 Database Deployment
 # ============================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: backend
+  name: postgres
 spec:
-  replicas: 1
+  replicas: 1  # Postgres shouldn't be scaled horizontally
   selector:
     matchLabels:
-      app: backend
+      app: postgres
   template:
     metadata:
       labels:
-        app: backend
+        app: postgres
     spec:
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        runAsGroup: 999
       containers:
-      - name: backend
-        image: prasadsb/3-tier:backend-v1
+      - name: postgres
+        image: postgres:13
         ports:
-        - containerPort: 5000
+        - containerPort: 5432
         resources:
           requests:
             cpu: "100m"
-            memory: "128Mi"
-          limits:
-            cpu: "200m"
             memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
         envFrom:
         - configMapRef:
-            name: backend-config
+            name: postgres-config
         - secretRef:
             name: postgres-secrets
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+          subPath: postgresql-data
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-pvc
 ---
 # ============================
-# 📌 Backend Service
+# 📌 Database Service
 # ============================
 apiVersion: v1
 kind: Service
 metadata:
-  name: backend
+  name: postgres
 spec:
   type: ClusterIP
   ports:
-  - port: 5000
-    targetPort: 5000
+  - port: 5432
+    targetPort: 5432
   selector:
-    app: backend
+    app: postgres
