@@ -59,7 +59,7 @@ my-app/
 ### 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/your-repository.git
+https://github.com/Prasad-b-git/3-tier-application.git
 cd your-repository
 ```
 
