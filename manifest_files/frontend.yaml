@@ -28,7 +28,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: prasadsb/3-tier:frontend-latest
+        image: prasadsb/3-tier:frontend-v1
         ports:
         - containerPort: 3000
         resources:
