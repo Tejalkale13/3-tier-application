@@ -32,7 +32,9 @@ jobs:
 
       - name: Deploy Manifests to GKE
         run: |
-          kubectl apply -f 3-tier-application/manifest_files/
+          kubectl apply -f 3-tier-application/manifest_files/postgres.yaml
+          kubectl apply -f 3-tier-application/manifest_files/backend.yaml
+          kubectl apply -f 3-tier-application/manifest_files/frontend.yaml
 
       - name: Verify Deployment
         run: |
