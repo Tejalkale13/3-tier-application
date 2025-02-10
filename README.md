@@ -54,13 +54,59 @@ my-app/
 6. **Horizontal Pod Autoscaling**:
    - The backend and frontend are horizontally scalable using Kubernetes, with **Horizontal Pod Autoscaling (HPA)** to automatically scale pods based on CPU usage.
 
-## How to Run Locally
+## Dependencies
+
+### Local Development
+
+- **Docker**: [Install Docker](https://docs.docker.com/get-docker/)
+- **Docker Compose**: [Install Docker Compose](https://docs.docker.com/compose/install/)
+- **Node.js**: [Install Node.js](https://nodejs.org/)
+- **Python**: [Install Python](https://www.python.org/downloads/)
+  
+#### Frontend (React.js)
+- **React.js**: The frontend app is built using React. Install dependencies with the following:
+  
+  ```bash
+  cd frontend
+  npm install
+  ```
+
+- **Required Packages** (for React):
+  - `react`
+  - `react-dom`
+  - `react-scripts`
+
+#### Backend (Flask)
+- **Flask**: Install Flask and the required Python libraries using the following:
+
+  ```bash
+  cd backend
+  pip install -r requirements.txt
+  ```
+
+- **Required Python Packages**:
+  - `flask`
+  - `psycopg2` (PostgreSQL adapter for Python)
+  - `flask-cors` (for handling cross-origin requests)
+  - `gunicorn` (WSGI HTTP server for production deployment)
+
+#### PostgreSQL
+- **PostgreSQL**: This is used as the database for the backend. You can use a local PostgreSQL instance or a managed database service.
+
+  - To run it locally, **Docker Compose** will manage it for you, as specified in the `docker-compose.yml`.
+
+### Kubernetes
+
+- **kubectl**: [Install kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
+- **Google Cloud SDK (for GKE)**: [Install the Google Cloud SDK](https://cloud.google.com/sdk/docs/install)
+
+### How to Run Locally
 
 ### 1. Clone the repository:
 
 ```bash
-https://github.com/Prasad-b-git/3-tier-application.git
-cd 3-tier-application
+git clone https://github.com/yourusername/your-repository.git
+cd your-repository
 ```
 
 ### 2. Setup the Project
@@ -161,3 +207,5 @@ Once the services are running in the Kubernetes cluster, you can access the appl
 ## Conclusion
 
 This project demonstrates the power of Docker and Kubernetes in deploying a scalable 3-tier web application. By using Kubernetes, the application can scale up or down automatically based on the load, making it efficient for production use.
+
+--- 
