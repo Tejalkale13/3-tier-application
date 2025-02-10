@@ -105,8 +105,8 @@ my-app/
 ### 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/your-repository.git
-cd your-repository
+git clone https://github.com/Prasad-b-git/3-tier-application.git
+cd 3-tier-application
 ```
 
 ### 2. Setup the Project
