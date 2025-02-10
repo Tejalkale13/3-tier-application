@@ -60,7 +60,7 @@ my-app/
 
 ```bash
 https://github.com/Prasad-b-git/3-tier-application.git
-cd your-repository
+cd 3-tier-application
 ```
 
 ### 2. Setup the Project
