@@ -10,7 +10,7 @@ This project demonstrates the deployment of a **3-tier application** using **Doc
 
 ```
 my-app/
-├── backend/
+├── backend/ 
 │   ├── Dockerfile
 │   ├── app.py
 │   ├── requirements.txt
