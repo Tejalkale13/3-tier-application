@@ -1,0 +1,26 @@
+# manifest_files/monitoring/service-monitors.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backend-monitor
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: backend  # match your backend service labels
+  endpoints:
+  - port: metrics   # the port your app exposes Prometheus metrics on
+    interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: frontend-monitor
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: frontend  # match your frontend service labels
+  endpoints:
+  - port: metrics    # the port your app exposes Prometheus metrics on
+    interval: 15s
