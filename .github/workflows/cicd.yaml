@@ -24,7 +24,7 @@ jobs:
       
       - name: Set up kubectl
         run: |
-          gcloud container clusters get-credentials my-gke-cluster --region us-central1 --project canvas-spark-446913-b1
+          gcloud container clusters get-credentials my-gke-cluster --region us-central1-a --project canvas-spark-446913-b1
           kubectl version --client
       
       - name: Deploy Manifests to GKE
