@@ -1,42 +1,97 @@
-name: Deploy to GKE
-
+name: Deploy to GKE with Monitoring
 on:
   push:
     branches:
       - main  # Deploy on push to main
   workflow_dispatch: # Allows manual trigger
-
 jobs:
   deploy:
     runs-on: self-hosted  # Use your self-hosted runner
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4  # Clones repo to the runner
-
+      
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
-
+      
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: canvas-spark-446913-b1
           export_default_credentials: true
-
+      
       - name: Set up kubectl
         run: |
           gcloud container clusters get-credentials my-gke-cluster --region us-central1 --project canvas-spark-446913-b1
           kubectl version --client
-
+      
       - name: Deploy Manifests to GKE
         run: |
           kubectl apply -f manifest_files/postgres.yaml
           kubectl apply -f manifest_files/backend.yaml
           kubectl apply -f manifest_files/frontend.yaml
-
+      
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version
+      
+      - name: Add Prometheus and Grafana Helm repositories
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+      
+      - name: Deploy Prometheus
+        run: |
+          kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+          helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+            --namespace monitoring \
+            --set prometheus.service.type=ClusterIP \
+            --set grafana.enabled=false
+      
+      - name: Deploy Grafana
+        run: |
+          helm upgrade --install grafana grafana/grafana \
+            --namespace monitoring \
+            --set service.type=ClusterIP \
+            --set persistence.enabled=true \
+            --set persistence.size=10Gi \
+            --set datasources."datasources\.yaml".apiVersion=1 \
+            --set datasources."datasources\.yaml".datasources[0].name=Prometheus \
+            --set datasources."datasources\.yaml".datasources[0].type=prometheus \
+            --set datasources."datasources\.yaml".datasources[0].url=http://prometheus-server.monitoring.svc.cluster.local \
+            --set datasources."datasources\.yaml".datasources[0].access=proxy \
+            --set datasources."datasources\.yaml".datasources[0].isDefault=true
+      
+      - name: Set up Ingress or Expose Services (Optional)
+        run: |
+          # Uncomment and adjust if you need to expose Grafana/Prometheus externally
+          # kubectl apply -f manifest_files/monitoring-ingress.yaml
+          # Or use port-forwarding for development access:
+          # kubectl port-forward svc/grafana 3000:80 -n monitoring &
+          # kubectl port-forward svc/prometheus-server 9090:80 -n monitoring &
+      
+      - name: Deploy ServiceMonitors for your applications
+        run: |
+          # Apply custom ServiceMonitor resources to monitor your applications
+          kubectl apply -f manifest_files/monitoring/service-monitors.yaml
+      
+      - name: Import Dashboards to Grafana
+        run: |
+          # Apply ConfigMaps containing dashboard JSON definitions
+          kubectl apply -f manifest_files/monitoring/grafana-dashboards.yaml
+      
+      - name: Get Grafana admin password
+        run: |
+          echo "Grafana admin password:"
+          kubectl get secret --namespace monitoring grafana -o jsonpath="{.data.admin-password}" | base64 --decode; echo
+      
       - name: Verify Deployment
         run: |
+          kubectl get pods -n monitoring
           kubectl get pods
+          kubectl get svc -n monitoring
           kubectl get svc
