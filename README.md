@@ -4,7 +4,7 @@ This project demonstrates the deployment of a **3-tier application** using **Doc
  
 - **Frontend**: Built using **React.js**
 - **Backend**: Built with **Flask** and connected to a **PostgreSQL** database
-- **Database**: **PostgreSQL**
+- **Database**: **PostgreSQL** 
 
 ## Project Structure
 
