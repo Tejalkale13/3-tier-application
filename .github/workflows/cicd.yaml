@@ -62,12 +62,23 @@ jobs:
             --set pushgateway.image.repository=gcr.io/google-samples/pushgateway \
             --set pushgateway.image.tag=v1.4.3
       
+      # Check existing Grafana PVC before deployment
+      - name: Check existing Grafana PVC
+        run: |
+          if kubectl get pvc -n monitoring grafana 2>/dev/null; then
+            echo "Current PVC size:"
+            kubectl get pvc -n monitoring grafana -o jsonpath='{.spec.resources.requests.storage}'
+            echo
+          else
+            echo "No existing PVC found"
+          fi
+      
       - name: Deploy Grafana
         run: |
           helm upgrade --install grafana grafana/grafana \
             --namespace monitoring \
             --set persistence.enabled=true \
-            --set persistence.size=8Gi \
+            --set persistence.size=10Gi \
             --set service.type=LoadBalancer \
             --set image.repository=docker.io/grafana/grafana \
             --set image.tag=9.5.2 \
@@ -442,3 +453,46 @@ jobs:
           kubectl get svc -n monitoring
           echo "Grafana will be available at the LoadBalancer IP below:"
           kubectl get svc grafana -n monitoring
+      
+      # Optional: Add fallback step if PVC issue persists
+      - name: Fallback - Delete and recreate Grafana PVC (Only if needed)
+        if: ${{ failure() }}
+        run: |
+          echo "Previous steps failed, attempting fallback procedure..."
+          echo "WARNING: This will delete Grafana data. Starting backup process..."
+          
+          # Try to export Grafana dashboards before deletion if possible
+          kubectl -n monitoring exec -it $(kubectl -n monitoring get pods -l "app.kubernetes.io/name=grafana" -o jsonpath="{.items[0].metadata.name}") -- \
+            bash -c "apt-get update && apt-get install -y curl jq && \
+            token=\$(curl -s -X POST -H 'Content-Type: application/json' -d '{\"name\":\"backup\",\"role\":\"Admin\"}' \
+            http://admin:\$(cat /etc/grafana/admin-password)@localhost:3000/api/auth/keys | jq -r '.key') && \
+            mkdir -p /tmp/dashboards && \
+            for uid in \$(curl -s -H \"Authorization: Bearer \$token\" http://localhost:3000/api/search?type=dash-db | jq -r '.[].uid'); do \
+              curl -s -H \"Authorization: Bearer \$token\" http://localhost:3000/api/dashboards/uid/\$uid > /tmp/dashboards/\$uid.json; \
+            done" || echo "Failed to backup dashboards, proceeding with deletion"
+          
+          # Delete Grafana resources
+          helm uninstall grafana -n monitoring
+          kubectl delete pvc -n monitoring grafana
+          
+          # Reinstall with correct size
+          helm upgrade --install grafana grafana/grafana \
+            --namespace monitoring \
+            --set persistence.enabled=true \
+            --set persistence.size=10Gi \
+            --set service.type=LoadBalancer \
+            --set image.repository=docker.io/grafana/grafana \
+            --set image.tag=9.5.2 \
+            --values - <<EOF
+          datasources:
+            datasources.yaml:
+              apiVersion: 1
+              datasources:
+              - name: Prometheus
+                type: prometheus
+                url: http://prometheus-server.monitoring.svc.cluster.local
+                access: proxy
+                isDefault: true
+          EOF
+          
+          echo "Grafana reinstalled. Note: Previous dashboards will need to be reimported."
