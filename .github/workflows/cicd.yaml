@@ -44,13 +44,13 @@ jobs:
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
       
-      - name: Deploy Prometheus
+      - name: Deploy Prometheus (Basic)
         run: |
           kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
-          helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+          helm upgrade --install prometheus prometheus-community/prometheus \
             --namespace monitoring \
-            --set prometheus.service.type=ClusterIP \
-            --set grafana.enabled=false
+            --set server.service.type=ClusterIP \
+            --timeout 5m
       
       - name: Deploy Grafana
         run: |
