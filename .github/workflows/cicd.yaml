@@ -44,19 +44,30 @@ jobs:
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
       
-      - name: Deploy Prometheus (Basic)
+      - name: Check for previous installations
         run: |
           kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+          helm list -n monitoring || true
+          
+          # Clean up any previous failed installations if needed
+          helm uninstall prometheus -n monitoring || true
+          helm uninstall grafana -n monitoring || true
+          
+          # Small delay to ensure cleanup completes
+          sleep 10
+      
+      - name: Deploy Prometheus
+        run: |
           helm upgrade --install prometheus prometheus-community/prometheus \
             --namespace monitoring \
-            --set server.service.type=ClusterIP \
+            --set server.persistentVolume.enabled=true \
+            --set server.persistentVolume.size=10Gi \
             --timeout 5m
       
       - name: Deploy Grafana
         run: |
           helm upgrade --install grafana grafana/grafana \
             --namespace monitoring \
-            --set service.type=ClusterIP \
             --set persistence.enabled=true \
             --set persistence.size=10Gi \
             --set datasources."datasources\.yaml".apiVersion=1 \
@@ -64,15 +75,8 @@ jobs:
             --set datasources."datasources\.yaml".datasources[0].type=prometheus \
             --set datasources."datasources\.yaml".datasources[0].url=http://prometheus-server.monitoring.svc.cluster.local \
             --set datasources."datasources\.yaml".datasources[0].access=proxy \
-            --set datasources."datasources\.yaml".datasources[0].isDefault=true
-      
-      - name: Set up Ingress or Expose Services (Optional)
-        run: |
-          # Uncomment and adjust if you need to expose Grafana/Prometheus externally
-          # kubectl apply -f manifest_files/monitoring-ingress.yaml
-          # Or use port-forwarding for development access:
-          # kubectl port-forward svc/grafana 3000:80 -n monitoring &
-          # kubectl port-forward svc/prometheus-server 9090:80 -n monitoring &
+            --set datasources."datasources\.yaml".datasources[0].isDefault=true \
+            --timeout 5m
       
       - name: Deploy ServiceMonitors for your applications
         run: |
@@ -84,14 +88,38 @@ jobs:
           # Apply ConfigMaps containing dashboard JSON definitions
           kubectl apply -f manifest_files/monitoring/grafana-dashboards.yaml
       
-      - name: Get Grafana admin password
+      - name: Expose monitoring services via LoadBalancer
         run: |
-          echo "Grafana admin password:"
-          kubectl get secret --namespace monitoring grafana -o jsonpath="{.data.admin-password}" | base64 --decode; echo
+          # Expose Grafana via LoadBalancer
+          kubectl patch svc grafana -n monitoring -p '{"spec": {"type": "LoadBalancer"}}'
+          
+          # Expose Prometheus via LoadBalancer
+          kubectl patch svc prometheus-server -n monitoring -p '{"spec": {"type": "LoadBalancer"}}'
+          
+          # Wait for external IPs to be assigned
+          echo "Waiting for LoadBalancer IPs to be assigned..."
+          sleep 30
+      
+      - name: Get monitoring access information
+        run: |
+          echo "Grafana endpoint:"
+          kubectl get svc grafana -n monitoring -o jsonpath='{.status.loadBalancer.ingress[0].ip}:{.spec.ports[0].port}'
+          echo ""
+          echo "Grafana admin credentials:"
+          echo "Username: admin"
+          echo "Password: $(kubectl get secret --namespace monitoring grafana -o jsonpath="{.data.admin-password}" | base64 --decode)"
+          echo ""
+          echo "Prometheus endpoint:"
+          kubectl get svc prometheus-server -n monitoring -o jsonpath='{.status.loadBalancer.ingress[0].ip}:{.spec.ports[0].port}'
+          echo ""
       
       - name: Verify Deployment
         run: |
-          kubectl get pods -n monitoring
+          echo "Application Pods:"
           kubectl get pods
+          echo ""
+          echo "Monitoring Pods:"
+          kubectl get pods -n monitoring
+          echo ""
+          echo "Monitoring Services with LoadBalancers:"
           kubectl get svc -n monitoring
-          kubectl get svc
