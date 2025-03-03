@@ -1,7 +1,7 @@
 # My App - 3-Tier Application with Docker and Kubernetes
 
 This project demonstrates the deployment of a **3-tier application** using **Docker** for local development and **Kubernetes** for production-grade deployment. The application consists of the following components:
-
+ 
 - **Frontend**: Built using **React.js**
 - **Backend**: Built with **Flask** and connected to a **PostgreSQL** database
 - **Database**: **PostgreSQL**
