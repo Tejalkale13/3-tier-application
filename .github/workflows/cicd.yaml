@@ -44,82 +44,401 @@ jobs:
           helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
       
-      - name: Check for previous installations
+      - name: Create monitoring namespace
         run: |
           kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
-          helm list -n monitoring || true
-          
-          # Clean up any previous failed installations if needed
-          helm uninstall prometheus -n monitoring || true
-          helm uninstall grafana -n monitoring || true
-          
-          # Small delay to ensure cleanup completes
-          sleep 10
       
+      # Use Google Container Registry mirrors instead of Quay.io
       - name: Deploy Prometheus
         run: |
           helm upgrade --install prometheus prometheus-community/prometheus \
             --namespace monitoring \
             --set server.persistentVolume.enabled=true \
             --set server.persistentVolume.size=10Gi \
-            --timeout 5m
+            --set server.image.repository=gcr.io/google-samples/prometheus \
+            --set server.image.tag=v2.40.7 \
+            --set alertmanager.image.repository=gcr.io/google-samples/alertmanager \
+            --set alertmanager.image.tag=v0.24.0 \
+            --set pushgateway.image.repository=gcr.io/google-samples/pushgateway \
+            --set pushgateway.image.tag=v1.4.3
       
       - name: Deploy Grafana
         run: |
           helm upgrade --install grafana grafana/grafana \
             --namespace monitoring \
             --set persistence.enabled=true \
-            --set persistence.size=10Gi \
-            --set datasources."datasources\.yaml".apiVersion=1 \
-            --set datasources."datasources\.yaml".datasources[0].name=Prometheus \
-            --set datasources."datasources\.yaml".datasources[0].type=prometheus \
-            --set datasources."datasources\.yaml".datasources[0].url=http://prometheus-server.monitoring.svc.cluster.local \
-            --set datasources."datasources\.yaml".datasources[0].access=proxy \
-            --set datasources."datasources\.yaml".datasources[0].isDefault=true \
-            --timeout 5m
+            --set persistence.size=8Gi \
+            --set service.type=LoadBalancer \
+            --set image.repository=docker.io/grafana/grafana \
+            --set image.tag=9.5.2 \
+            --values - <<EOF
+          datasources:
+            datasources.yaml:
+              apiVersion: 1
+              datasources:
+              - name: Prometheus
+                type: prometheus
+                url: http://prometheus-server.monitoring.svc.cluster.local
+                access: proxy
+                isDefault: true
+          EOF
+      
+      - name: Deploy node-exporter as DaemonSet
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: DaemonSet
+          metadata:
+            name: node-exporter
+            namespace: monitoring
+            labels:
+              app: node-exporter
+          spec:
+            selector:
+              matchLabels:
+                app: node-exporter
+            template:
+              metadata:
+                labels:
+                  app: node-exporter
+              spec:
+                containers:
+                - name: node-exporter
+                  image: docker.io/prom/node-exporter:v1.5.0
+                  ports:
+                  - containerPort: 9100
+                    name: metrics
+                  volumeMounts:
+                  - name: proc
+                    mountPath: /host/proc
+                    readOnly: true
+                  - name: sys
+                    mountPath: /host/sys
+                    readOnly: true
+                volumes:
+                - name: proc
+                  hostPath:
+                    path: /proc
+                - name: sys
+                  hostPath:
+                    path: /sys
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: node-exporter
+            namespace: monitoring
+            labels:
+              app: node-exporter
+          spec:
+            ports:
+            - port: 9100
+              targetPort: 9100
+              name: metrics
+            selector:
+              app: node-exporter
+          EOF
       
       - name: Deploy ServiceMonitors for your applications
         run: |
-          # Apply custom ServiceMonitor resources to monitor your applications
-          kubectl apply -f manifest_files/monitoring/service-monitors.yaml
+          cat <<EOF | kubectl apply -f -
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: backend-monitor
+            namespace: monitoring
+          spec:
+            selector:
+              matchLabels:
+                app: backend  # match your backend service labels
+            endpoints:
+            - port: metrics   # the port your app exposes Prometheus metrics on
+              interval: 15s
+          ---
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: frontend-monitor
+            namespace: monitoring
+          spec:
+            selector:
+              matchLabels:
+                app: frontend  # match your frontend service labels
+            endpoints:
+            - port: metrics    # the port your app exposes Prometheus metrics on
+              interval: 15s
+          EOF
+      
+      - name: Create Prometheus scrape configs for node-exporter
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: prometheus-server-conf
+            namespace: monitoring
+            labels:
+              app: prometheus
+          data:
+            prometheus.yml: |
+              global:
+                scrape_interval: 15s
+              scrape_configs:
+                - job_name: 'node-exporter'
+                  kubernetes_sd_configs:
+                    - role: endpoints
+                      namespaces:
+                        names:
+                          - monitoring
+                  relabel_configs:
+                    - source_labels: [__meta_kubernetes_service_name]
+                      regex: node-exporter
+                      action: keep
+                - job_name: 'kubernetes-pods'
+                  kubernetes_sd_configs:
+                    - role: pod
+                  relabel_configs:
+                    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+                      action: keep
+                      regex: true
+                    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+                      action: replace
+                      target_label: __metrics_path__
+                      regex: (.+)
+                    - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+                      action: replace
+                      regex: ([^:]+)(?::\d+)?;(\d+)
+                      replacement: $1:$2
+                      target_label: __address__
+                    - action: labelmap
+                      regex: __meta_kubernetes_pod_label_(.+)
+                    - source_labels: [__meta_kubernetes_namespace]
+                      action: replace
+                      target_label: kubernetes_namespace
+                    - source_labels: [__meta_kubernetes_pod_name]
+                      action: replace
+                      target_label: kubernetes_pod_name
+                - job_name: 'kubernetes-services'
+                  kubernetes_sd_configs:
+                    - role: service
+                  relabel_configs:
+                    - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+                      action: keep
+                      regex: true
+                    - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+                      action: replace
+                      target_label: __metrics_path__
+                      regex: (.+)
+                    - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+                      action: replace
+                      regex: ([^:]+)(?::\d+)?;(\d+)
+                      replacement: $1:$2
+                      target_label: __address__
+                    - action: labelmap
+                      regex: __meta_kubernetes_service_label_(.+)
+                    - source_labels: [__meta_kubernetes_namespace]
+                      action: replace
+                      target_label: kubernetes_namespace
+                    - source_labels: [__meta_kubernetes_service_name]
+                      action: replace
+                      target_label: kubernetes_service_name
+          EOF
+          
+          # Apply the ConfigMap to Prometheus
+          kubectl -n monitoring patch deployment prometheus-server -p '{"spec":{"template":{"spec":{"volumes":[{"name":"config-volume","configMap":{"name":"prometheus-server-conf"}}]}}}}'
       
       - name: Import Dashboards to Grafana
         run: |
-          # Apply ConfigMaps containing dashboard JSON definitions
-          kubectl apply -f manifest_files/monitoring/grafana-dashboards.yaml
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: grafana-dashboards
+            namespace: monitoring
+            labels:
+              grafana_dashboard: "1"
+          data:
+            kubernetes-pod-overview.json: |
+              {
+                "annotations": {
+                  "list": []
+                },
+                "editable": true,
+                "gnetId": null,
+                "graphTooltip": 0,
+                "id": null,
+                "links": [],
+                "panels": [
+                  {
+                    "datasource": "Prometheus",
+                    "fieldConfig": {
+                      "defaults": {
+                        "color": {
+                          "mode": "palette-classic"
+                        },
+                        "custom": {
+                          "axisLabel": "",
+                          "axisPlacement": "auto",
+                          "barAlignment": 0,
+                          "drawStyle": "line",
+                          "fillOpacity": 10,
+                          "gradientMode": "none",
+                          "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                          },
+                          "lineInterpolation": "linear",
+                          "lineWidth": 1,
+                          "pointSize": 5,
+                          "scaleDistribution": {
+                            "type": "linear"
+                          },
+                          "showPoints": "never",
+                          "spanNulls": true
+                        },
+                        "mappings": [],
+                        "thresholds": {
+                          "mode": "absolute",
+                          "steps": [
+                            {
+                              "color": "green",
+                              "value": null
+                            }
+                          ]
+                        },
+                        "unit": "percentunit"
+                      },
+                      "overrides": []
+                    },
+                    "gridPos": {
+                      "h": 8,
+                      "w": 12,
+                      "x": 0,
+                      "y": 0
+                    },
+                    "id": 2,
+                    "options": {
+                      "legend": {
+                        "calcs": [],
+                        "displayMode": "list",
+                        "placement": "bottom"
+                      },
+                      "tooltip": {
+                        "mode": "single"
+                      }
+                    },
+                    "targets": [
+                      {
+                        "expr": "sum(rate(container_cpu_usage_seconds_total{container!=\"\"}[5m])) by (pod)",
+                        "interval": "",
+                        "legendFormat": "{{pod}}",
+                        "refId": "A"
+                      }
+                    ],
+                    "title": "Pod CPU Usage",
+                    "type": "timeseries"
+                  },
+                  {
+                    "datasource": "Prometheus",
+                    "fieldConfig": {
+                      "defaults": {
+                        "color": {
+                          "mode": "palette-classic"
+                        },
+                        "custom": {
+                          "axisLabel": "",
+                          "axisPlacement": "auto",
+                          "barAlignment": 0,
+                          "drawStyle": "line",
+                          "fillOpacity": 10,
+                          "gradientMode": "none",
+                          "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                          },
+                          "lineInterpolation": "linear",
+                          "lineWidth": 1,
+                          "pointSize": 5,
+                          "scaleDistribution": {
+                            "type": "linear"
+                          },
+                          "showPoints": "never",
+                          "spanNulls": true
+                        },
+                        "mappings": [],
+                        "thresholds": {
+                          "mode": "absolute",
+                          "steps": [
+                            {
+                              "color": "green",
+                              "value": null
+                            }
+                          ]
+                        },
+                        "unit": "bytes"
+                      },
+                      "overrides": []
+                    },
+                    "gridPos": {
+                      "h": 8,
+                      "w": 12,
+                      "x": 12,
+                      "y": 0
+                    },
+                    "id": 3,
+                    "options": {
+                      "legend": {
+                        "calcs": [],
+                        "displayMode": "list",
+                        "placement": "bottom"
+                      },
+                      "tooltip": {
+                        "mode": "single"
+                      }
+                    },
+                    "targets": [
+                      {
+                        "expr": "sum(container_memory_usage_bytes{container!=\"\"}) by (pod)",
+                        "interval": "",
+                        "legendFormat": "{{pod}}",
+                        "refId": "A"
+                      }
+                    ],
+                    "title": "Pod Memory Usage",
+                    "type": "timeseries"
+                  }
+                ],
+                "refresh": "10s",
+                "schemaVersion": 30,
+                "style": "dark",
+                "tags": [],
+                "templating": {
+                  "list": []
+                },
+                "time": {
+                  "from": "now-1h",
+                  "to": "now"
+                },
+                "timepicker": {},
+                "timezone": "",
+                "title": "Kubernetes Pod Overview",
+                "uid": "k8s-pod-overview",
+                "version": 1
+              }
+          EOF
       
-      - name: Expose monitoring services via LoadBalancer
+      - name: Get Grafana admin password
         run: |
-          # Expose Grafana via LoadBalancer
-          kubectl patch svc grafana -n monitoring -p '{"spec": {"type": "LoadBalancer"}}'
-          
-          # Expose Prometheus via LoadBalancer
-          kubectl patch svc prometheus-server -n monitoring -p '{"spec": {"type": "LoadBalancer"}}'
-          
-          # Wait for external IPs to be assigned
-          echo "Waiting for LoadBalancer IPs to be assigned..."
-          sleep 30
+          echo "Grafana admin password:"
+          kubectl get secret --namespace monitoring grafana -o jsonpath="{.data.admin-password}" | base64 --decode; echo
       
-      - name: Get monitoring access information
+      - name: Verify Monitoring Deployment
         run: |
-          echo "Grafana endpoint:"
-          kubectl get svc grafana -n monitoring -o jsonpath='{.status.loadBalancer.ingress[0].ip}:{.spec.ports[0].port}'
-          echo ""
-          echo "Grafana admin credentials:"
-          echo "Username: admin"
-          echo "Password: $(kubectl get secret --namespace monitoring grafana -o jsonpath="{.data.admin-password}" | base64 --decode)"
-          echo ""
-          echo "Prometheus endpoint:"
-          kubectl get svc prometheus-server -n monitoring -o jsonpath='{.status.loadBalancer.ingress[0].ip}:{.spec.ports[0].port}'
-          echo ""
-      
-      - name: Verify Deployment
-        run: |
-          echo "Application Pods:"
-          kubectl get pods
-          echo ""
-          echo "Monitoring Pods:"
+          echo "Checking Prometheus components:"
           kubectl get pods -n monitoring
-          echo ""
-          echo "Monitoring Services with LoadBalancers:"
+          echo "Checking services:"
           kubectl get svc -n monitoring
+          echo "Grafana will be available at the LoadBalancer IP below:"
+          kubectl get svc grafana -n monitoring
